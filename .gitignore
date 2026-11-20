@@ -1,5 +1,5 @@
 cookies.json
-config.yaml
+state/
 tt2x.db
 downloads/
 __pycache__/

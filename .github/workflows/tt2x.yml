@@ -1,0 +1,77 @@
+name: tt2x
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # GitHub may start these late; posting slots tolerate up to 2h delay
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only check TikTok and show what would be posted (nothing goes to X)"
+        type: boolean
+        default: true
+
+# Never two runs at once: this is what prevents two runs posting the same carousel.
+concurrency:
+  group: tt2x
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # to save tt2x.db and downloads on the tt2x-state branch
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore state (what was already seen/posted)
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          url="https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads "$url" tt2x-state >/dev/null; then
+            git clone --quiet --depth 1 --branch tt2x-state "$url" state
+          else
+            mkdir -p state && git -C state init --quiet -b tt2x-state
+            git -C state remote add origin "$url"
+            echo "first run: starting with an empty history"
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          pip install -e '.[browser]'
+          python -m playwright install --with-deps chromium
+
+      - name: Dry run (check TikTok, show next post)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        run: |
+          tt2x -v check
+          tt2x queue --all
+          tt2x post-next --dry-run
+
+      - name: Check and post if a slot is due
+        if: github.event_name == 'schedule' || !inputs.dry_run
+        env:
+          TWEETKIT_COOKIE: ${{ secrets.TWEETKIT_COOKIE }}
+        run: |
+          if [ -z "$TWEETKIT_COOKIE" ]; then echo "::error::Add the TWEETKIT_COOKIE repository secret"; exit 1; fi
+          tt2x run --once
+          tt2x queue
+
+      - name: Save state
+        if: always()
+        run: |
+          tt2x prune || true
+          cd state
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then echo "no state change"; exit 0; fi
+          git commit --quiet -m "tt2x state $(date -u +%FT%TZ)"
+          git push --quiet origin HEAD:tt2x-state

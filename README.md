@@ -20,22 +20,18 @@ Needs Python 3.10+ on a computer or server that stays on.
 git clone <this repo> && cd <repo>
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e .
-tt2x init            # creates config.yaml
 ```
 
 ### 1. Add the TikTok accounts
 ```bash
 tt2x add-account @account_one @account_two https://www.tiktok.com/@account_three
 ```
-Or edit `accounts:` in `config.yaml`. Set your `timezone` and posting `slots` there too.
+Or edit `accounts:` in `config.yaml` (already set to the four watched accounts). Set your `timezone` and posting `slots` there too.
 
 ### 2. Add your X cookie
-Log in to x.com in your browser and export the cookies to `cookies.json` next to `config.yaml`,
-for example with a "cookie editor" browser extension (its JSON export works as-is). A minimal file:
-```json
-{ "auth_token": "…", "ct0": "…" }
-```
-`cookies.json` is in `.gitignore`. **Never commit or share it**: it is a login to your account.
+Set the environment variable `TWEETKIT_COOKIE="X_AUTH_TOKEN = …, X_CT0 = …"` (see
+[how to get the values](#1-get-your-x-cookies)), or put them in a `cookies.json` next to
+`config.yaml`. `cookies.json` is in `.gitignore`. **Never commit or share it**: it is a login to your account.
 
 ## Use
 
@@ -75,7 +71,41 @@ in that order, and attached in that order. With `max_images_per_post: 0`, all sl
 post**. If X refuses that many images, it automatically posts a thread of 4 per post in order (the
 same happens if you set `max_images_per_post: 4`).
 
-## Run it in the background
+## Run on GitHub Actions (no computer needed)
+
+The workflow `.github/workflows/tt2x.yml` runs every 30 minutes on GitHub. It checks the accounts
+in `config.yaml` (at most every `check_every_minutes`) and posts one carousel when a time slot is due.
+The memory of what was already seen and posted (`tt2x.db` + queued images) is saved to the
+`tt2x-state` branch after every run. **Don't delete that branch**, or old carousels could be queued again.
+
+### 1. Get your X cookies
+1. On a computer, open **x.com** in Chrome or Edge, logged in to the account that should post.
+2. Press **F12** → **Application** tab (Firefox: **Storage**) → **Cookies** → `https://x.com`.
+3. Copy the **Value** of `auth_token` and of `ct0`.
+4. Stay logged in in that browser. Logging out kills the cookie, and you'd have to repeat this.
+
+### 2. Save them as one secret
+GitHub repo → **Settings → Secrets and variables → Actions → New repository secret**:
+- Name: `TWEETKIT_COOKIE`
+- Value: `X_AUTH_TOKEN = <auth_token value>, X_CT0 = <ct0 value>`
+
+Other accepted value formats: `auth_token=…; ct0=…` (a copied Cookie header) or JSON.
+Alternatively, use two secrets, `X_AUTH_TOKEN` and `X_CT0`.
+
+### 3. Test, then let it run
+- **Actions tab → tt2x → Run workflow** with *dry_run* ticked: it checks TikTok and prints what it
+  would post, slide by slide, without touching X.
+- After that, the 30-minute schedule posts for real at your slots. Untick *dry_run* to post the
+  next due item right away.
+- To pause: **Actions → tt2x → ⋯ → Disable workflow**.
+- On the first run it queues the recent posts of every account (up to `posts_per_account_scan`
+  each) and works through them oldest first. Use `newest_first` in `config.yaml` to post latest first.
+
+If the log shows TikTok listing errors, GitHub's servers are probably being blocked by TikTok.
+Run `tt2x run` on your own computer instead, with the same secret as an environment variable
+(`TWEETKIT_COOKIE`).
+
+## Run it in the background (your own computer)
 
 **Linux (systemd)**, in `~/.config/systemd/user/tt2x.service`:
 ```ini

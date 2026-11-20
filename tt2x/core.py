@@ -84,7 +84,12 @@ def post_next(cfg: Config, db: DB, poster, *, dry_run: bool = False, post_id: in
     if not rows:
         return "nothing queued"
     row = rows[0]
-    files = [Path(i["file"]) for i in db.images(row["id"])]
+    files = []
+    for img in db.images(row["id"]):
+        f = Path(img["file"])
+        if not f.exists():  # data folder moved (e.g. another machine/runner): look in downloads/<id>/
+            f = cfg.downloads_path / row["tiktok_id"] / f.name
+        files.append(f)
     missing = [f for f in files if not f.exists()]
     if missing or not files:
         db.mark_failed(row["id"], f"missing image files: {missing or 'none'}")

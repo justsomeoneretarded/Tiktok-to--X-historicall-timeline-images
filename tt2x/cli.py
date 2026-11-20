@@ -110,13 +110,14 @@ def cmd_run(args, cfg, db):
         log.warning("#%s was mid-post when the program stopped. Check X, then run "
                     "`tt2x retry %s` or `tt2x skip %s`.", row["id"], row["id"], row["id"])
     poster = _poster(cfg)
-    next_check = 0.0
     print(f"running: {len(cfg.accounts)} accounts, check every {cfg.check_every_minutes} min, "
-          f"slots {cfg.slots} ({cfg.timezone}). Ctrl+C to stop.")
+          f"slots {cfg.slots} ({cfg.timezone}).{'' if args.once else ' Ctrl+C to stop.'}")
     while True:
-        if time.time() >= next_check:
+        last_check = float(db.get_meta("last_check") or 0)
+        # small margin so a 60-min interval is not missed by a run that starts a few seconds early
+        if time.time() >= last_check + cfg.check_every_minutes * 60 - 120:
+            db.set_meta("last_check", str(time.time()))
             log.info("check: %s", check_accounts(cfg, db))
-            next_check = time.time() + cfg.check_every_minutes * 60
         last = db.get_meta("last_slot")
         last_dt = datetime.fromisoformat(last) if last else None
         slot = due_slot(utcnow(), cfg.slots, cfg.timezone, last_dt, cfg.missed_slot_grace_minutes)
@@ -126,6 +127,16 @@ def cmd_run(args, cfg, db):
         if args.once:
             return
         time.sleep(30)
+
+
+def cmd_prune(args, cfg, db):
+    removed = 0
+    for row in db.conn.execute("SELECT id, tiktok_id FROM posts WHERE status NOT IN ('queued','posting','failed')"):
+        folder = cfg.downloads_path / row["tiktok_id"]
+        if folder.is_dir():
+            shutil.rmtree(folder)
+            removed += 1
+    print(f"removed image folders of {removed} finished items (their fingerprints are kept)")
 
 
 def main(argv=None):
@@ -146,6 +157,7 @@ def main(argv=None):
     s.set_defaults(fn=cmd_post_next)
     s = sub.add_parser("retry"); s.add_argument("id", type=int); s.set_defaults(fn=cmd_retry)
     s = sub.add_parser("skip"); s.add_argument("id", type=int); s.set_defaults(fn=cmd_skip)
+    sub.add_parser("prune").set_defaults(fn=cmd_prune)
     s = sub.add_parser("run"); s.add_argument("--once", action="store_true"); s.set_defaults(fn=cmd_run)
 
     args = p.parse_args(argv)

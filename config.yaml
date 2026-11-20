@@ -1,0 +1,36 @@
+# tt2x settings. Safe to commit: no secrets here (X cookies come from the TWEETKIT_COOKIE secret).
+
+# TikTok accounts to watch (handles, with or without @, or profile links)
+accounts:
+  - "@masonofthecosmos"
+  - "@liminalozo"
+  - "@ytrabbitholess"
+  - "@ainvest_visuals"
+
+# How often to look for new carousels
+check_every_minutes: 60
+
+schedule:
+  timezone: "Africa/Addis_Ababa"   # any IANA zone, e.g. "America/New_York"
+  slots: ["09:00", "14:00", "20:00"]  # one post per slot
+  order: oldest_first              # or newest_first
+  missed_slot_grace_minutes: 120   # a slot missed by more than this (computer asleep) is skipped
+
+# Post text. Placeholders: {caption} {author} {url}
+caption_template: "{caption}\n\n📷 via @{author} on TikTok"
+
+# 0 = every slide in ONE post, in order. If X refuses that many images,
+# it automatically falls back to a thread of 4 per post.
+max_images_per_post: 0
+
+# true = allow captions longer than 280 characters (X Premium)
+long_text: false
+
+posts_per_account_scan: 30
+
+# Duplicate detection (same images re-uploaded, or from another account)
+dedupe_max_distance: 6     # how different two slides may be (0 = identical)
+dedupe_match_ratio: 0.8    # share of slides that must match to count as a duplicate
+
+cookies_file: cookies.json  # only used when the TWEETKIT_COOKIE env var / secret is not set
+data_dir: "state"            # tt2x.db + downloads/ (kept on the tt2x-state branch by GitHub Actions)
