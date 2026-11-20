@@ -151,7 +151,10 @@ def cmd_show(args, cfg, db):
 
 
 def cmd_post_next(args, cfg, db):
-    print(post_next(cfg, db, None if args.dry_run else _poster(cfg), dry_run=args.dry_run, post_id=args.id))
+    result = post_next(cfg, db, None if args.dry_run else _poster(cfg), dry_run=args.dry_run, post_id=args.id)
+    print(result)
+    if " failed" in result or "partly posted" in result:
+        sys.exit(1)
 
 
 def cmd_retry(args, cfg, db):

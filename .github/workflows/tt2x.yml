@@ -9,6 +9,10 @@ on:
         description: "Only check TikTok and show what would be posted (nothing goes to X)"
         type: boolean
         default: true
+      post_now:
+        description: "Post the next queued item immediately instead of waiting for its time slot (needs dry_run off)"
+        type: boolean
+        default: false
       links:
         description: "Optional TikTok links to queue (photo or slideshow-video posts), separated by spaces or commas"
         type: string
@@ -93,9 +97,14 @@ jobs:
         env:
           TWEETKIT_COOKIE: ${{ secrets.TWEETKIT_COOKIE }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          POST_NOW: ${{ inputs.post_now }}
         run: |
           if [ -z "$TWEETKIT_COOKIE" ]; then echo "::error::Add the TWEETKIT_COOKIE repository secret"; exit 1; fi
-          tt2x run --once
+          if [ "$POST_NOW" = "true" ]; then
+            tt2x -v post-next
+          else
+            tt2x run --once
+          fi
           tt2x queue
 
       - name: Upload debug screenshots (what TikTok showed the browser)
