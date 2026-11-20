@@ -46,3 +46,20 @@ def test_nothing_configured(monkeypatch, tmp_path):
         monkeypatch.delenv(k, raising=False)
     with pytest.raises(FileNotFoundError):
         load_cookie_dict(tmp_path / "none.json")
+
+
+def test_ondemand_hash_old_and_new_layouts():
+    from tt2x.x_poster import find_ondemand_hash
+    old = '<script>window.__SCRIPTS__={"ondemand.s":"a1b2c3d4e5","other":"zz"}</script>'
+    new = ('<script>e.u=e=>e+"."+{12:"vendor",20113:"ondemand.s",40:"main"}[e]+"."+'
+           '{12:"aaaa1111",20113:"9f8e7d6c5b4a",40:"bbbb2222"}[e]+"a.js"</script>')
+    assert find_ondemand_hash(old) == "a1b2c3d4e5"
+    assert find_ondemand_hash(new) == "9f8e7d6c5b4a"
+    assert find_ondemand_hash("<html>nothing</html>") is None
+
+
+def test_patch_installs():
+    from twikit.x_client_transaction.transaction import ClientTransaction
+    from tt2x.x_poster import patch_twikit
+    patch_twikit()
+    assert ClientTransaction._tt2x_patched

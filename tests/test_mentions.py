@@ -119,3 +119,9 @@ def test_dry_run_shows_suggestions_and_asks_gemini_once(cfg, db, fake_download, 
     assert "['SpaceX']" in core.post_next(cfg, db, None, dry_run=True)
     core.post_next(cfg, db, None, dry_run=True)
     assert len(calls) == 1  # remembered in the DB
+
+
+def test_sample_keeps_first_and_last():
+    from tt2x.mentions import _sample
+    s = _sample(list(range(24)), 10)
+    assert len(s) == 10 and s[0] == 0 and s[-1] == 23 and s == sorted(s)

@@ -55,10 +55,18 @@ def parse_suggestions(data, limit: int) -> list[str]:
     return out
 
 
+def _sample(items: list, n: int) -> list:
+    """At most n items spread evenly from first to last (keeps the title and the end)."""
+    if len(items) <= n:
+        return list(items)
+    step = (len(items) - 1) / (n - 1)
+    return [items[round(i * step)] for i in range(n)]
+
+
 def _image_part(path: Path) -> dict:
     with Image.open(path) as img:
         img = img.convert("RGB")
-        img.thumbnail((512, 512))
+        img.thumbnail((384, 384))
         buf = io.BytesIO()
         img.save(buf, "JPEG", quality=80)
     return {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(buf.getvalue()).decode()}}
@@ -75,11 +83,11 @@ def suggest_handles(caption: str, images: list[Path], *, limit: int, model: str,
     ask = limit + 2
     body = {
         "contents": [{"parts": [{"text": PROMPT.format(caption=caption or "(none)", limit=ask)},
-                                *[_image_part(p) for p in images[:24]]]}],
+                                *[_image_part(p) for p in _sample(images, 10)]]}],
         "generationConfig": {"temperature": 0, "responseMimeType": "application/json", "responseSchema": SCHEMA},
     }
     try:
-        c = client or httpx.Client(timeout=90)
+        c = client or httpx.Client(timeout=httpx.Timeout(180, connect=15))
         r = c.post(GEMINI_URL.format(model=model), headers={"x-goog-api-key": api_key}, json=body)
         r.raise_for_status()
         text = r.json()["candidates"][0]["content"]["parts"][0]["text"]

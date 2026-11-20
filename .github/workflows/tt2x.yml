@@ -85,8 +85,10 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TWEETKIT_COOKIE: ${{ secrets.TWEETKIT_COOKIE }}
         run: |
           status=0
+          tt2x whoami || status=$?   # read-only check that the X cookie works
           tt2x check || status=$?   # non-zero when every account is blocked
           tt2x queue --all
           tt2x post-next --dry-run

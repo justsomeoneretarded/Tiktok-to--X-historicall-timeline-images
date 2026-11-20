@@ -86,6 +86,54 @@ def chunk(items: list, size: int) -> list[list]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
+_OLD_ONDEMAND = re.compile(r"""['"]ondemand\.s['"]:\s*['"](\w+)['"]""")
+_NEW_ONDEMAND_ID = re.compile(r"""[{,](\d+):\s*['"]ondemand\.s['"]""")
+_INDICES = re.compile(r"""(\(\w\[(\d{1,2})\],\s*16\))+""")
+
+
+def find_ondemand_hash(html: str) -> str | None:
+    """Locate the ondemand.s script hash in x.com's homepage.
+
+    Older pages had `"ondemand.s":"<hash>"`. Newer ones map chunk ids to names and hashes
+    in separate tables: `123:"ondemand.s"` ... `123:"<hash>"`.
+    """
+    m = _OLD_ONDEMAND.search(html)
+    if m:
+        return m.group(1)
+    m = _NEW_ONDEMAND_ID.search(html)
+    if m:
+        h = re.search(r"""[{,]%s:\s*['"]([0-9a-f]{4,})['"]""" % re.escape(m.group(1)), html)
+        if h:
+            return h.group(1)
+    return None
+
+
+def patch_twikit() -> None:
+    """twikit 2.3.x fails with "Couldn't get KEY_BYTE indices" since X changed its homepage.
+    Replace its lookup with one that understands both layouts."""
+    try:
+        from twikit.x_client_transaction.transaction import ClientTransaction
+    except ImportError:
+        return
+    if getattr(ClientTransaction, "_tt2x_patched", False):
+        return
+
+    async def get_indices(self, home_page_response, session, headers):
+        response = self.validate_response(home_page_response) or self.home_page_response
+        file_hash = find_ondemand_hash(str(response))
+        if not file_hash:
+            raise Exception("Couldn't find X's ondemand.s script (X changed its site again)")
+        url = f"https://abs.twimg.com/responsive-web/client-web/ondemand.s.{file_hash}a.js"
+        js = await session.request(method="GET", url=url, headers=headers)
+        indices = [int(m.group(2)) for m in _INDICES.finditer(str(js.text))]
+        if not indices:
+            raise Exception("Couldn't get KEY_BYTE indices")
+        return indices[0], indices[1:]
+
+    ClientTransaction.get_indices = get_indices
+    ClientTransaction._tt2x_patched = True
+
+
 class XPoster:
     def __init__(self, cookies_path: Path, *, max_images_per_post: int = 0, long_text: bool = False,
                  client=None):
@@ -98,6 +146,7 @@ class XPoster:
         if self._client is None:
             from twikit import Client
 
+            patch_twikit()
             c = Client("en-US")
             c.set_cookies(load_cookie_dict(self.cookies_path))
             self._client = c
@@ -162,6 +211,13 @@ class XPoster:
             else:
                 log.info("not mentioning @%s: unverified with %d followers", h, followers)
         return ok
+
+    def whoami(self) -> str:
+        """Read-only login check: the screen name the cookies belong to."""
+        async def run():
+            user = await self._get_client().user()
+            return f"@{user.screen_name} ({user.name})"
+        return asyncio.run(run())
 
     def verify_handles(self, handles: list[str], min_followers: int = 10000) -> list[str]:
         """Keep only handles that exist on X and look official (verified, or many followers)."""

@@ -150,6 +150,13 @@ def cmd_show(args, cfg, db):
         print(f"      slide {img['idx']:>2}: {img['file']}")
 
 
+def cmd_whoami(args, cfg, db):
+    try:
+        print("X login OK:", _poster(cfg).whoami())
+    except Exception as e:  # noqa: BLE001
+        sys.exit(f"X login check failed: {type(e).__name__}: {e}")
+
+
 def cmd_post_next(args, cfg, db):
     result = post_next(cfg, db, None if args.dry_run else _poster(cfg), dry_run=args.dry_run, post_id=args.id)
     print(result)
@@ -258,6 +265,7 @@ def main(argv=None):
     s = sub.add_parser("hold"); s.add_argument("ids", type=int, nargs="+"); s.set_defaults(fn=cmd_hold)
     s = sub.add_parser("release"); s.add_argument("ids", type=int, nargs="+"); s.set_defaults(fn=cmd_release)
     sub.add_parser("prune").set_defaults(fn=cmd_prune)
+    sub.add_parser("whoami", help="check the X cookies work (posts nothing)").set_defaults(fn=cmd_whoami)
     s = sub.add_parser("run"); s.add_argument("--once", action="store_true"); s.set_defaults(fn=cmd_run)
 
     args = p.parse_args(argv)
