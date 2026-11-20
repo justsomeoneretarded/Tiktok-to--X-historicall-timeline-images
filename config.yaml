@@ -28,6 +28,11 @@ long_text: false
 
 posts_per_account_scan: 30
 
+# Slideshow videos (one picture after another) are turned into ordered images too.
+include_videos: true
+video_min_slide_seconds: 0.6   # a picture shown shorter than this counts as a transition
+video_change_threshold: 10     # how different a frame must be to count as the next picture
+
 # Duplicate detection (same images re-uploaded, or from another account)
 dedupe_max_distance: 6     # how different two slides may be (0 = identical)
 dedupe_match_ratio: 0.8    # share of slides that must match to count as a duplicate

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -57,11 +58,67 @@ def cmd_add_url(args, cfg, db):
         print(f"{url}: {ingest(cfg, db, car)} ({len(car.image_urls)} slides, @{car.author})")
 
 
+def _all_blocked(cfg, totals) -> bool:
+    return bool(cfg.accounts) and totals.get("blocked_accounts", 0) >= len(cfg.accounts)
+
+
+BLOCKED_MSG = ("no account could be listed: TikTok/tikwm are blocking this connection "
+               "(see the debug screenshots). Add posts with `tt2x add-url`, or run `tt2x check --sync` "
+               "on a home computer.")
+
+
+def _git(cwd, *args, check=True):
+    return subprocess.run(["git", *args], cwd=cwd, check=check, capture_output=True, text=True)
+
+
+def _pull_state(cfg) -> None:
+    """Make the data folder an exact copy of the tt2x-state branch (the shared memory)."""
+    d = cfg.data_path
+    d.mkdir(parents=True, exist_ok=True)
+    if not (d / ".git").exists():
+        url = _git(cfg.path.parent, "remote", "get-url", "origin").stdout.strip()
+        _git(d, "init", "-q", "-b", "tt2x-state")
+        _git(d, "remote", "add", "origin", url)
+    if _git(d, "fetch", "-q", "--depth", "1", "origin", "tt2x-state", check=False).returncode == 0:
+        _git(d, "reset", "-q", "--hard", "FETCH_HEAD")
+        _git(d, "clean", "-qfd")
+
+
+def _push_state(cfg) -> bool:
+    d = cfg.data_path
+    shutil.rmtree(d / "debug", ignore_errors=True)
+    _git(d, "add", "-A")
+    if _git(d, "diff", "--cached", "--quiet", check=False).returncode == 0:
+        return True
+    _git(d, "-c", "user.name=tt2x", "-c", "user.email=tt2x@users.noreply.github.com",
+         "commit", "-q", "-m", f"tt2x state (local check) {utcnow():%Y-%m-%dT%H:%MZ}")
+    return _git(d, "push", "-q", "origin", "HEAD:tt2x-state", check=False).returncode == 0
+
+
 def cmd_check(args, cfg, db):
     if not cfg.accounts:
         print("no accounts in config; use `tt2x add-account @handle`")
         return
-    print(check_accounts(cfg, db))
+    if not args.sync:
+        totals = check_accounts(cfg, db)
+    else:
+        # Share the queue with GitHub Actions: start from its latest state, add new posts, push.
+        # If GitHub pushed in the meantime, start over from its version (checking is repeatable).
+        for attempt in range(3):
+            db.conn.close()
+            _pull_state(cfg)
+            db = DB(cfg.db_path)
+            totals = check_accounts(cfg, db)
+            db.conn.close()
+            if _push_state(cfg):
+                print("state pushed to the tt2x-state branch")
+                break
+            log.warning("tt2x-state changed while checking; retrying (%d/3)", attempt + 1)
+        else:
+            sys.exit("could not push state; try again later")
+    print(totals)
+    if _all_blocked(cfg, totals):
+        sys.exit(BLOCKED_MSG)
 
 
 def cmd_queue(args, cfg, db):
@@ -110,6 +167,7 @@ def cmd_run(args, cfg, db):
         log.warning("#%s was mid-post when the program stopped. Check X, then run "
                     "`tt2x retry %s` or `tt2x skip %s`.", row["id"], row["id"], row["id"])
     poster = _poster(cfg)
+    blocked = False
     print(f"running: {len(cfg.accounts)} accounts, check every {cfg.check_every_minutes} min, "
           f"slots {cfg.slots} ({cfg.timezone}).{'' if args.once else ' Ctrl+C to stop.'}")
     while True:
@@ -117,7 +175,11 @@ def cmd_run(args, cfg, db):
         # small margin so a 60-min interval is not missed by a run that starts a few seconds early
         if time.time() >= last_check + cfg.check_every_minutes * 60 - 120:
             db.set_meta("last_check", str(time.time()))
-            log.info("check: %s", check_accounts(cfg, db))
+            totals = check_accounts(cfg, db)
+            log.info("check: %s", totals)
+            blocked = _all_blocked(cfg, totals)
+            if blocked:
+                log.error(BLOCKED_MSG)
         last = db.get_meta("last_slot")
         last_dt = datetime.fromisoformat(last) if last else None
         slot = due_slot(utcnow(), cfg.slots, cfg.timezone, last_dt, cfg.missed_slot_grace_minutes)
@@ -125,6 +187,8 @@ def cmd_run(args, cfg, db):
             db.set_meta("last_slot", slot.isoformat())  # mark first: a slot fires at most once
             log.info("slot %s: %s", slot.strftime("%H:%M"), post_next(cfg, db, poster))
         if args.once:
+            if blocked:  # still posted whatever was due above; now make the run visibly fail
+                sys.exit(1)
             return
         time.sleep(30)
 
@@ -149,7 +213,10 @@ def main(argv=None):
     s = sub.add_parser("add-account"); s.add_argument("handles", nargs="+"); s.set_defaults(fn=cmd_add_account)
     s = sub.add_parser("remove-account"); s.add_argument("handles", nargs="+"); s.set_defaults(fn=cmd_remove_account)
     s = sub.add_parser("add-url"); s.add_argument("urls", nargs="+"); s.set_defaults(fn=cmd_add_url)
-    sub.add_parser("check").set_defaults(fn=cmd_check)
+    s = sub.add_parser("check")
+    s.add_argument("--sync", action="store_true",
+                   help="pull the tt2x-state branch first and push the result (home computer + GitHub posting)")
+    s.set_defaults(fn=cmd_check)
     s = sub.add_parser("queue"); s.add_argument("--all", action="store_true"); s.add_argument("--limit", type=int, default=50)
     s.set_defaults(fn=cmd_queue)
     s = sub.add_parser("show"); s.add_argument("id", type=int); s.set_defaults(fn=cmd_show)

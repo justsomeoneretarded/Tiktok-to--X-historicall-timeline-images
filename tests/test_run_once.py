@@ -11,7 +11,7 @@ def setup(tmp_path, monkeypatch, fake_download, posts):
         "accounts: ['@acct']\ncheck_every_minutes: 60\ndata_dir: state\n"
         "schedule:\n  timezone: UTC\n  slots: ['09:00', '14:00', '20:00']\n"
     )
-    monkeypatch.setattr(tiktok, "list_account_posts", lambda h, n: list(posts))
+    monkeypatch.setattr(tiktok, "list_account_posts", lambda h, n, debug_dir=None: list(posts))
     sent = []
 
     class Poster:
@@ -65,3 +65,18 @@ def test_check_is_throttled_across_runs(tmp_path, monkeypatch, fake_download):
         at(monkeypatch, h, m)
         cli.main(["-c", cfgp, "run", "--once"])
     assert len(calls) == 2  # 10:00 and 11:00 only
+
+
+def test_all_accounts_blocked_fails_the_run(tmp_path, monkeypatch, fake_download):
+    import pytest
+    cfgp, _ = setup(tmp_path, monkeypatch, fake_download, [])
+
+    def blocked(h, n, debug_dir=None):
+        raise tiktok.TikTokError("blocked")
+
+    monkeypatch.setattr(tiktok, "list_account_posts", blocked)
+    at(monkeypatch, 10, 0)
+    with pytest.raises(SystemExit):
+        cli.main(["-c", cfgp, "check"])
+    with pytest.raises(SystemExit):
+        cli.main(["-c", cfgp, "run", "--once"])

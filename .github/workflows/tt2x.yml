@@ -9,6 +9,10 @@ on:
         description: "Only check TikTok and show what would be posted (nothing goes to X)"
         type: boolean
         default: true
+      links:
+        description: "Optional TikTok links to queue (photo or slideshow-video posts), separated by spaces or commas"
+        type: string
+        default: ""
 
 # Never two runs at once: this is what prevents two runs posting the same carousel.
 concurrency:
@@ -48,12 +52,23 @@ jobs:
           pip install -e '.[browser]'
           python -m playwright install --with-deps chromium
 
+      - name: Queue pasted links
+        if: github.event_name == 'workflow_dispatch' && inputs.links != ''
+        env:
+          LINKS: ${{ inputs.links }}
+        run: |
+          for url in $(echo "$LINKS" | tr ',' ' '); do
+            tt2x add-url "$url" || echo "::warning::could not add $url"
+          done
+
       - name: Dry run (check TikTok, show next post)
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
         run: |
-          tt2x -v check
+          status=0
+          tt2x check || status=$?   # non-zero when every account is blocked
           tt2x queue --all
           tt2x post-next --dry-run
+          exit $status
 
       - name: Check and post if a slot is due
         if: github.event_name == 'schedule' || !inputs.dry_run
@@ -64,10 +79,19 @@ jobs:
           tt2x run --once
           tt2x queue
 
+      - name: Upload debug screenshots (what TikTok showed the browser)
+        if: always() && hashFiles('state/debug/**') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: tiktok-debug
+          path: state/debug/
+          retention-days: 7
+
       - name: Save state
         if: always()
         run: |
           tt2x prune || true
+          rm -rf state/debug
           cd state
           git config user.name "github-actions[bot]"
           git config user.email "41898283+github-actions[bot]@users.noreply.github.com"

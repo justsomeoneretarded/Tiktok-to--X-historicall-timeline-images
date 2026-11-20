@@ -31,10 +31,15 @@ class Carousel:
     url: str
     created_at: int  # unix seconds
     image_urls: list[str] = field(default_factory=list)  # in slide order
+    video_url: str = ""  # for video posts (slideshow videos get turned into stills)
 
     @property
     def is_photo(self) -> bool:
         return bool(self.image_urls)
+
+    @property
+    def kind(self) -> str:
+        return "photo" if self.is_photo else ("video" if self.video_url else "unknown")
 
 
 class TikTokError(RuntimeError):
@@ -54,13 +59,16 @@ def carousel_from_item_struct(item: dict) -> Carousel:
         if url_list:
             urls.append(url_list[0])
     pid = str(item["id"])
+    video = item.get("video") or {}
+    video_url = "" if urls else (video.get("playAddr") or video.get("downloadAddr") or "")
     return Carousel(
         id=pid,
         author=handle or "",
         caption=item.get("desc", "") or "",
-        url=f"https://www.tiktok.com/@{handle}/photo/{pid}",
+        url=f"https://www.tiktok.com/@{handle}/{'photo' if urls else 'video'}/{pid}",
         created_at=int(item.get("createTime") or 0),
         image_urls=urls,
+        video_url=video_url,
     )
 
 
@@ -69,25 +77,39 @@ def carousel_from_tikwm(data: dict) -> Carousel:
     author = data.get("author") or {}
     handle = author.get("unique_id", "") if isinstance(author, dict) else ""
     pid = str(data.get("video_id") or data.get("id") or data.get("aweme_id"))
-    images = data.get("images") or []
+    images = [u for u in (data.get("images") or []) if isinstance(u, str)]
+    video_url = "" if images else (data.get("hdplay") or data.get("play") or "")
+    if video_url.startswith("/"):
+        video_url = TIKWM + video_url
     return Carousel(
         id=pid,
         author=handle,
         caption=data.get("title", "") or "",
-        url=f"https://www.tiktok.com/@{handle}/photo/{pid}",
+        url=f"https://www.tiktok.com/@{handle}/{'photo' if images else 'video'}/{pid}",
         created_at=int(data.get("create_time") or 0),
-        image_urls=[u for u in images if isinstance(u, str)],
+        image_urls=images,
+        video_url=video_url,
     )
 
 
-def parse_post_html(html: str) -> Carousel:
+def _rehydration_scope(html: str) -> dict:
     m = re.search(
         r'<script[^>]+id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>', html, re.S
     )
     if not m:
         raise TikTokError("page has no rehydration data (blocked or layout changed)")
-    data = json.loads(m.group(1))
-    scope = data.get("__DEFAULT_SCOPE__", {})
+    return json.loads(m.group(1)).get("__DEFAULT_SCOPE__", {})
+
+
+def parse_profile_video_count(html: str) -> int | None:
+    detail = _rehydration_scope(html).get("webapp.user-detail") or {}
+    stats = (detail.get("userInfo") or {}).get("stats") or {}
+    count = stats.get("videoCount")
+    return int(count) if count is not None else None
+
+
+def parse_post_html(html: str) -> Carousel:
+    scope = _rehydration_scope(html)
     detail = scope.get("webapp.video-detail") or scope.get("webapp.photo-detail") or {}
     item = (detail.get("itemInfo") or {}).get("itemStruct")
     if not item:
@@ -150,7 +172,7 @@ def _tikwm_user_posts(handle: str, count: int) -> list[Carousel]:
     return out[:count]
 
 
-def _playwright_user_posts(handle: str, count: int) -> list[Carousel]:
+def _playwright_user_posts(handle: str, count: int, debug_dir: Path | None = None) -> list[Carousel]:
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as e:
@@ -174,17 +196,66 @@ def _playwright_user_posts(handle: str, count: int) -> list[Carousel]:
                 break
             page.mouse.wheel(0, 4000)
             page.wait_for_timeout(1500)
+        if not items and debug_dir is not None:
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=str(debug_dir / f"{handle}.png"), full_page=False)
+            (debug_dir / f"{handle}.txt").write_text(f"title: {page.title()}\nurl: {page.url}\n", encoding="utf-8")
         browser.close()
     return [carousel_from_item_struct(i) for i in items[:count]]
 
 
-def list_account_posts(handle: str, count: int = 30) -> list[Carousel]:
-    """Recent posts of an account, newest first. Photo posts have image_urls."""
+def profile_video_count(handle: str) -> int | None:
     try:
-        return _tikwm_user_posts(handle, count)
+        with _client() as c:
+            r = c.get(f"https://www.tiktok.com/@{handle}")
+            r.raise_for_status()
+            return parse_profile_video_count(r.text)
     except Exception as e:  # noqa: BLE001
-        log.info("tikwm listing for @%s failed (%s); trying browser", handle, e)
-    return _playwright_user_posts(handle, count)
+        log.info("could not read @%s profile (%s)", handle, e)
+        return None
+
+
+def list_account_posts(handle: str, count: int = 30, debug_dir: Path | None = None) -> list[Carousel]:
+    """Recent posts of an account, newest first. Photo posts have image_urls, videos video_url.
+
+    Raises TikTokError when every method came back empty although the profile has posts,
+    so a blocked scan shows up as an error instead of "nothing new".
+    """
+    reasons = []
+    for name, fn in (("tikwm", lambda: _tikwm_user_posts(handle, count)),
+                     ("browser", lambda: _playwright_user_posts(handle, count, debug_dir))):
+        try:
+            posts = fn()
+            if posts:
+                return posts
+            reasons.append(f"{name}: no posts returned")
+        except Exception as e:  # noqa: BLE001
+            reasons.append(f"{name}: {str(e).splitlines()[0][:150]}")
+        log.info("@%s %s", handle, reasons[-1])
+    shown = profile_video_count(handle)
+    if shown == 0:
+        return []
+    raise TikTokError(f"blocked: could not list @{handle} (profile shows {shown} posts; {'; '.join(reasons)})")
+
+
+def download_video(car: Carousel, dest: Path) -> Path:
+    """Save the post's video as dest/video.mp4 (opening the post page first for its cookies)."""
+    dest.mkdir(parents=True, exist_ok=True)
+    target = dest / "video.mp4"
+    if target.exists():
+        return target
+    with _client() as c:
+        if "tiktok.com" in car.video_url and car.url:
+            try:
+                c.get(car.url)  # TikTok's video CDN wants the cookies set by the post page
+            except Exception:  # noqa: BLE001
+                pass
+        with c.stream("GET", car.video_url) as r:
+            r.raise_for_status()
+            with open(target, "wb") as fh:
+                for chunk in r.iter_bytes():
+                    fh.write(chunk)
+    return target
 
 
 def download_images(car: Carousel, dest: Path) -> list[Path]:

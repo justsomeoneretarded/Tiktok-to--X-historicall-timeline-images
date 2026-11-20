@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import tiktok
+from . import tiktok, video
 from .config import Config
 from .db import DB
 from .dedupe import content_hash, find_similar, fingerprint
@@ -28,16 +29,24 @@ def render_caption(cfg: Config, row) -> str:
 
 
 def ingest(cfg: Config, db: DB, car: tiktok.Carousel) -> str:
-    """Add one carousel. Returns: seen | skipped_video | skipped_duplicate | queued."""
+    """Add one post. Returns: seen | skipped_video | skipped_duplicate | queued."""
     if db.seen(car.id):
         return "seen"
     common = dict(tiktok_id=car.id, author=car.author, caption=car.caption,
                   url=car.url, created_at=car.created_at)
-    if not car.is_photo:  # a normal video: no slides to repost
+    dest = cfg.downloads_path / car.id
+    if car.is_photo:
+        files = tiktok.download_images(car, dest)
+    elif car.video_url and cfg.include_videos:
+        files = video_to_slides(cfg, car, dest)
+        if not files:  # normal footage, not a slideshow
+            shutil.rmtree(dest, ignore_errors=True)
+            db.add_post(status="skipped_video", **common)
+            return "skipped_video"
+    else:
         db.add_post(status="skipped_video", **common)
         return "skipped_video"
 
-    files = tiktok.download_images(car, cfg.downloads_path / car.id)
     prints = [fingerprint(f) for f in files]
     phashes = [p for _, p in prints]
     ch = content_hash(phashes)
@@ -58,14 +67,25 @@ def ingest(cfg: Config, db: DB, car: tiktok.Carousel) -> str:
     return status
 
 
+def video_to_slides(cfg: Config, car: tiktok.Carousel, dest: Path) -> list[Path]:
+    clip = tiktok.download_video(car, dest)
+    try:
+        return video.extract_slides(clip, dest, min_seconds=cfg.video_min_slide_seconds,
+                                    threshold=cfg.video_change_threshold)
+    finally:
+        clip.unlink(missing_ok=True)  # keep only the stills
+
+
 def check_accounts(cfg: Config, db: DB) -> dict[str, int]:
+    """Scan every account. totals["blocked_accounts"] counts accounts that could not be listed."""
     totals: dict[str, int] = {}
     for handle in cfg.accounts:
         try:
-            posts = tiktok.list_account_posts(handle, cfg.posts_per_account_scan)
+            posts = tiktok.list_account_posts(handle, cfg.posts_per_account_scan,
+                                              debug_dir=cfg.data_path / "debug")
         except Exception as e:  # noqa: BLE001
             log.error("could not list @%s: %s", handle, e)
-            totals["errors"] = totals.get("errors", 0) + 1
+            totals["blocked_accounts"] = totals.get("blocked_accounts", 0) + 1
             continue
         for car in posts:
             try:

@@ -22,6 +22,9 @@ class Config:
     max_images_per_post: int = 0  # 0 = all slides in one post
     long_text: bool = False  # X Premium long posts; otherwise captions are cut to 280
     posts_per_account_scan: int = 30
+    include_videos: bool = True  # turn slideshow videos into ordered stills
+    video_min_slide_seconds: float = 0.6  # shorter on-screen pictures count as transitions
+    video_change_threshold: int = 10  # perceptual-hash bits that mean "a new picture"
     dedupe_max_distance: int = 6  # perceptual-hash bits that may differ
     dedupe_match_ratio: float = 0.8  # share of slides that must match to call it a duplicate
     cookies_file: str = "cookies.json"

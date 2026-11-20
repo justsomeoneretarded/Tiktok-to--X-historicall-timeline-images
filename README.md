@@ -1,7 +1,7 @@
-# tt2x: TikTok carousels → scheduled X posts
+# tt2x: TikTok carousels & slideshow videos → scheduled X posts
 
-Watches TikTok accounts that post **photo carousels** (history timelines, step-by-step stories…),
-downloads every slide **in the original order**, and posts each carousel to X at the times you
+Watches TikTok accounts that post **photo carousels** or **slideshow videos** (history timelines,
+step-by-step stories…), gets every picture **in the original order**, and posts each carousel to X at the times you
 choose, **never posting the same thing twice**.
 
 ```
@@ -63,6 +63,31 @@ to confirm the slide order. When it looks right, run `tt2x run`.
    longer than `missed_slot_grace_minutes` are skipped instead of posting a burst.
 
 Keep `tt2x.db`: it is the memory of what was posted. Deleting it would let old carousels be queued again.
+
+## Slideshow videos
+
+Video posts are downloaded and turned into one still per picture, in the order they appear on screen.
+Fades and transitions are dropped, and a picture that briefly returns isn't doubled. Normal videos
+(people talking, moving footage) aren't slideshows; they're detected and skipped (`skipped_video`).
+Tune with `video_min_slide_seconds` and `video_change_threshold` in `config.yaml`. Always check a few
+results in `downloads/<id>/` at first.
+
+## When TikTok blocks the account scan
+
+TikTok (and tikwm.com) often refuse to list accounts for cloud servers like GitHub's. When every
+account fails, the run turns **red**, and the run page has a **tiktok-debug** artifact with a
+screenshot of what TikTok showed. You have two ways around it:
+
+- **Paste links:** Actions → tt2x → Run workflow, put TikTok links in *links* (space or comma
+  separated). They're queued with the same order and duplicate checks and posted on schedule.
+- **Scan from home, post from GitHub:** on your own computer, in the repo folder, run
+  ```bash
+  tt2x check --sync
+  ```
+  It loads the shared memory from the `tt2x-state` branch, finds and downloads new posts with your
+  home connection, and pushes them back. GitHub then posts them at the scheduled times. Run it
+  whenever you like, or schedule it (Task Scheduler / cron) every few hours. Your computer only
+  needs to be on when it runs.
 
 ## Order of slides
 

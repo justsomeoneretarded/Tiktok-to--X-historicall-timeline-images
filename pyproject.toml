@@ -12,6 +12,7 @@ dependencies = [
     "httpx",
     "Pillow",
     "imagehash",
+    "imageio-ffmpeg",
     "PyYAML",
     "tzdata",
 ]
