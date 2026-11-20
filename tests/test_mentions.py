@@ -44,7 +44,9 @@ def test_gemini_request_and_key_not_leaked(tmp_path):
     assert "Evolution of SpaceX" in parts[0]["text"] and "inline_data" in parts[1]
 
 
-def test_gemini_failure_never_blocks(tmp_path, caplog):
+def test_gemini_failure_never_blocks(tmp_path, caplog, monkeypatch):
+    import tt2x.mentions as m
+    monkeypatch.setattr(m.time, "sleep", lambda s: None)
     client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(500, text="boom k123")))
     assert suggest_handles("c", [], limit=8, model="m", api_key="k123", client=client) is None
     assert "k123" not in caplog.text
@@ -119,3 +121,26 @@ def test_sample_keeps_first_and_last():
     from tt2x.mentions import _sample
     s = _sample(list(range(24)), 10)
     assert len(s) == 10 and s[0] == 0 and s[-1] == 23 and s == sorted(s)
+
+
+def test_gemini_retries_when_busy(monkeypatch):
+    import tt2x.mentions as m
+    monkeypatch.setattr(m.time, "sleep", lambda s: None)
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        if len(calls) < 3:
+            return httpx.Response(503, text="overloaded")
+        return httpx.Response(200, json=gemini_reply([{"name": "SpaceX", "x_handle": "SpaceX"}]))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    assert suggest_handles("c", [], limit=8, model="m", api_key="k", client=client) == ["SpaceX"]
+    assert len(calls) == 3
+
+
+def test_gemini_gives_up_after_retries(monkeypatch):
+    import tt2x.mentions as m
+    monkeypatch.setattr(m.time, "sleep", lambda s: None)
+    client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(503)))
+    assert suggest_handles("c", [], limit=8, model="m", api_key="k", client=client) is None

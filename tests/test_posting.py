@@ -70,7 +70,7 @@ def test_falls_back_to_ordered_thread(cfg, db, fake_download, monkeypatch):
     client = FakeClient(max_images=4)
     post_next(cfg, db, XPoster(Path("x"), client=client))
     groups = [t["media_ids"] for t in client.tweets]
-    assert groups == [[f"m-{i:02d}" for i in r] for r in ([1, 2, 3, 4], [5, 6, 7, 8], [9, 10])]
+    assert groups == [[f"m-{i:02d}" for i in r] for r in ([1, 2, 3, 4], [5, 6, 7], [8, 9, 10])]  # balanced, order kept
     assert client.tweets[0]["reply_to"] is None
     assert client.tweets[1]["reply_to"] == "1001" and client.tweets[2]["reply_to"] == "1002"
 
@@ -104,3 +104,25 @@ def test_ambiguous_answer_is_never_retried(cfg, db, fake_download):
     assert "failed" in out and "check X" in out
     assert db.all()[0]["status"] == "failed"
     assert client.tweets == [] and len(client.uploads) == 6
+
+
+def test_balanced_split_from_x_limit(cfg, db, fake_download, monkeypatch):
+    from tt2x.x_poster import balanced_chunks, media_limit_from_error
+    monkeypatch.setattr("tt2x.x_poster.time.sleep", lambda s: None)
+    assert media_limit_from_error("BadRequest: Tweet must not have more than 20 mediaIds. (324)") == 20
+    assert [len(g) for g in balanced_chunks(list(range(24)), 20)] == [12, 12]
+    assert [len(g) for g in balanced_chunks(list(range(41)), 20)] == [14, 14, 13]
+
+    class Limit20(FakeClient):
+        def create_tweet(self, text, media_ids=None, reply_to=None, quote_tweet_id=None):
+            if len(media_ids) > 20:
+                return {"ok": False, "status": 200,
+                        "error": "BadRequest: Tweet must not have more than 20 mediaIds. (324)"}
+            return super().create_tweet(text, media_ids, reply_to)
+
+    queue_one(cfg, db, 24)
+    client = Limit20()
+    post_next(cfg, db, XPoster(Path("x"), client=client))
+    groups = [t["media_ids"] for t in client.tweets]
+    assert [len(g) for g in groups] == [12, 12]
+    assert sum(groups, []) == [f"m-{i:02d}" for i in range(1, 25)]  # order kept

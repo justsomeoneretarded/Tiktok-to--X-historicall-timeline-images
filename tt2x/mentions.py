@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 
 import httpx
@@ -16,6 +17,8 @@ from PIL import Image
 log = logging.getLogger(__name__)
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+RETRIES = 4
+RETRY_WAIT = 10  # seconds, grows each try: 10, 20, 30
 HANDLE_RE = re.compile(r"^[A-Za-z0-9_]{1,15}$")
 
 PROMPT = """These images are the slides, in order, of a social media post. Its caption is:
@@ -87,13 +90,28 @@ def suggest_handles(caption: str, images: list[Path], *, limit: int, model: str,
                                 *[_image_part(p) for p in _sample(images, 10)]]}],
         "generationConfig": {"temperature": 0, "responseMimeType": "application/json", "responseSchema": SCHEMA},
     }
-    try:
-        c = client or httpx.Client(timeout=httpx.Timeout(180, connect=15))
-        r = c.post(GEMINI_URL.format(model=model), headers={"x-goog-api-key": api_key}, json=body)
-        r.raise_for_status()
-        text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-        return parse_suggestions(json.loads(text), ask)
-    except Exception as e:  # noqa: BLE001  (never block a post because of mentions)
-        msg = str(e).replace(api_key, "***")
-        log.warning("Gemini mention lookup failed: %s", msg[:300])
-        return None
+    c = client or httpx.Client(timeout=httpx.Timeout(180, connect=15))
+    for attempt in range(1, RETRIES + 1):
+        try:
+            r = c.post(GEMINI_URL.format(model=model), headers={"x-goog-api-key": api_key}, json=body)
+            if r.status_code in (429, 500, 502, 503, 504) and attempt < RETRIES:
+                raise _Transient(f"HTTP {r.status_code}")
+            r.raise_for_status()
+            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            return parse_suggestions(json.loads(text), ask)
+        except (_Transient, httpx.TimeoutException, httpx.TransportError) as e:
+            if attempt == RETRIES:
+                log.warning("Gemini mention lookup failed after %d tries: %s", RETRIES,
+                            str(e).replace(api_key, "***")[:200])
+                return None
+            wait = RETRY_WAIT * attempt
+            log.info("Gemini busy (%s); retrying in %ds", e, wait)
+            time.sleep(wait)
+        except Exception as e:  # noqa: BLE001  (never block a post because of mentions)
+            log.warning("Gemini mention lookup failed: %s", str(e).replace(api_key, "***")[:300])
+            return None
+    return None
+
+
+class _Transient(Exception):
+    pass

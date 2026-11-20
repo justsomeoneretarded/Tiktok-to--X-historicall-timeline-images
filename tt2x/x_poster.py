@@ -81,6 +81,26 @@ def fit_text(text: str, long_text: bool) -> str:
     return text[: MAX_TEXT - 1].rstrip() + "…"
 
 
+def balanced_chunks(items: list, limit: int) -> list[list]:
+    """Fewest groups of at most `limit`, as even as possible, order kept (24 @ 20 -> 12 + 12)."""
+    if limit <= 0 or len(items) <= limit:
+        return [list(items)]
+    n = -(-len(items) // limit)
+    base, extra = divmod(len(items), n)
+    out, i = [], 0
+    for g in range(n):
+        size = base + (1 if g < extra else 0)
+        out.append(items[i:i + size])
+        i += size
+    return out
+
+
+def media_limit_from_error(message: str) -> int | None:
+    """X says e.g. 'Tweet must not have more than 20 mediaIds.'"""
+    m = re.search(r"more than (\d+) media", message, re.I)
+    return int(m.group(1)) if m else None
+
+
 def chunk(items: list, size: int) -> list[list]:
     if size <= 0:
         return [items]
@@ -158,9 +178,10 @@ class XPoster:
                 if len(media_ids) <= FALLBACK_CHUNK:
                     raise
                 # Nothing was posted, so splitting into an ordered thread is safe.
-                log.warning("X refused %d images in one post (%s); posting a thread of %d per post",
-                            len(media_ids), e, FALLBACK_CHUNK)
-                groups = chunk(media_ids, FALLBACK_CHUNK)
+                limit = media_limit_from_error(str(e)) or FALLBACK_CHUNK
+                groups = balanced_chunks(media_ids, limit)
+                log.warning("X refused %d images in one post (%s); posting a thread of %s",
+                            len(media_ids), e, "+".join(str(len(g)) for g in groups))
         return self._thread(text, groups)
 
     def _thread(self, text: str, groups: list[list[str]]) -> list[str]:
