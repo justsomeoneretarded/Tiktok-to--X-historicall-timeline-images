@@ -2,7 +2,10 @@
 
 # TikTok accounts to watch (handles, with or without @, or profile links)
 accounts:
-  - "@example_history_account"
+  - "@masonofthecosmos"
+  - "@liminalozo"
+  - "@ytrabbitholess"
+  - "@ainvest_visuals"
 
 # How often to look for new carousels
 check_every_minutes: 60
