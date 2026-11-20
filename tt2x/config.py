@@ -7,7 +7,7 @@ from pathlib import Path
 
 import yaml
 
-DEFAULT_CAPTION = "{caption}\n\n📷 via @{author} on TikTok"
+DEFAULT_CAPTION = "{caption}\n\n{mentions}\n📷 via {author} on TikTok"
 
 
 @dataclass
@@ -21,6 +21,10 @@ class Config:
     caption_template: str = DEFAULT_CAPTION
     max_images_per_post: int = 0  # 0 = all slides in one post
     long_text: bool = False  # X Premium long posts; otherwise captions are cut to 280
+    mentions: bool = True  # @mention the people/companies a post is about (needs GEMINI_API_KEY)
+    max_mentions: int = 8
+    mention_min_followers: int = 10000  # unverified accounts below this are not tagged (impostor guard)
+    gemini_model: str = "gemini-flash-latest"
     posts_per_account_scan: int = 30
     include_videos: bool = True  # turn slideshow videos into ordered stills
     video_min_slide_seconds: float = 0.6  # shorter on-screen pictures count as transitions

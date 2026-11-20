@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from pathlib import Path
@@ -45,6 +46,10 @@ class DB:
         self.conn = sqlite3.connect(str(path))
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(posts)")}
+        if "mentions" not in cols:  # added later: JSON list of suggested X handles, NULL = not looked up yet
+            self.conn.execute("ALTER TABLE posts ADD COLUMN mentions TEXT")
+            self.conn.commit()
 
     # ----- reads -----
     def seen(self, tiktok_id: str) -> bool:
@@ -123,6 +128,10 @@ class DB:
     def set_status(self, post_id: int, status: str) -> None:
         with self.conn:
             self.conn.execute("UPDATE posts SET status=? WHERE id=?", (status, post_id))
+
+    def set_mentions(self, post_id: int, handles: list[str]) -> None:
+        with self.conn:
+            self.conn.execute("UPDATE posts SET mentions=? WHERE id=?", (json.dumps(handles), post_id))
 
     def get_meta(self, key: str) -> str | None:
         row = self.conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()

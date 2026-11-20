@@ -64,6 +64,29 @@ to confirm the slide order. When it looks right, run `tt2x run`.
 
 Keep `tt2x.db`: it is the memory of what was posted. Deleting it would let old carousels be queued again.
 
+## @mentions
+
+Each post tags up to 8 people or companies it is about (for example a SpaceX timeline →
+@SpaceX @elonmusk @NASA).
+
+1. **Gemini suggests them.** It reads the caption and the slide images. Get a free key at
+   https://aistudio.google.com/apikey and add it as a repository secret named **`GEMINI_API_KEY`**.
+   Without the key, posts simply go out without mentions.
+2. **Each handle is checked on X before posting.** A handle is only used if the account exists and is
+   verified or has at least `mention_min_followers` (10,000) followers. This blocks wrong guesses
+   and impostor accounts.
+3. **Mentions always fit.** If the text is too long for one post, the caption is shortened; the
+   mentions and the credit line are kept.
+
+A dry run shows the suggested handles before anything is posted. Change `max_mentions` or turn
+mentions off with `mentions: false` in `config.yaml`.
+
+## Holding items
+
+Run the workflow with **manage** set to, for example, `hold 1` (keep #1 queued but don't post it),
+`release 1` (back in line), `skip 4` (never post) or `retry 5` (after a failure). Item numbers come
+from the queue list in any run's log.
+
 ## Slideshow videos
 
 Video posts are downloaded and turned into one still per picture, in the order they appear on screen.

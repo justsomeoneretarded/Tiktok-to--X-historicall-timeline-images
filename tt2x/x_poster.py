@@ -146,6 +146,27 @@ class XPoster:
     def post(self, text: str, files: list[Path]) -> list[str]:
         return asyncio.run(self._post(text, files))
 
+    async def _verify(self, handles: list[str], min_followers: int) -> list[str]:
+        client = self._get_client()
+        ok = []
+        for h in handles:
+            try:
+                user = await client.get_user_by_screen_name(h)
+            except Exception as e:  # noqa: BLE001  (missing/suspended account)
+                log.info("not mentioning @%s: %s", h, str(e)[:100])
+                continue
+            verified = bool(getattr(user, "is_blue_verified", False) or getattr(user, "verified", False))
+            followers = int(getattr(user, "followers_count", 0) or 0)
+            if verified or followers >= min_followers:
+                ok.append(getattr(user, "screen_name", None) or h)
+            else:
+                log.info("not mentioning @%s: unverified with %d followers", h, followers)
+        return ok
+
+    def verify_handles(self, handles: list[str], min_followers: int = 10000) -> list[str]:
+        """Keep only handles that exist on X and look official (verified, or many followers)."""
+        return asyncio.run(self._verify(handles, min_followers))
+
 
 class PartialThreadError(RuntimeError):
     def __init__(self, tweet_ids: list[str], cause: Exception):

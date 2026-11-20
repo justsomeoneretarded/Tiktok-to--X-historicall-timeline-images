@@ -79,6 +79,8 @@ jobs:
 
       - name: Dry run (check TikTok, show next post)
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           status=0
           tt2x check || status=$?   # non-zero when every account is blocked
@@ -90,6 +92,7 @@ jobs:
         if: github.event_name == 'schedule' || !inputs.dry_run
         env:
           TWEETKIT_COOKIE: ${{ secrets.TWEETKIT_COOKIE }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           if [ -z "$TWEETKIT_COOKIE" ]; then echo "::error::Add the TWEETKIT_COOKIE repository secret"; exit 1; fi
           tt2x run --once

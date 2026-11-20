@@ -16,8 +16,16 @@ schedule:
   order: oldest_first              # or newest_first
   missed_slot_grace_minutes: 120   # a slot missed by more than this (computer asleep) is skipped
 
-# Post text. Placeholders: {caption} {author} {url}
-caption_template: "{caption}\n\n📷 via @{author} on TikTok"
+# Post text. Placeholders: {caption} {mentions} {author} {url}
+# ({author} is the TikTok creator; no @ so it doesn't tag an unrelated X account with that name)
+caption_template: "{caption}\n\n{mentions}\n📷 via {author} on TikTok"
+
+# @mention the people/companies a post is about. Gemini reads the caption and slides
+# (needs the GEMINI_API_KEY secret); each handle is checked on X before it's used.
+mentions: true
+max_mentions: 8
+mention_min_followers: 10000   # unverified accounts with fewer followers are never tagged
+gemini_model: "gemini-flash-latest"
 
 # 0 = every slide in ONE post, in order. If X refuses that many images,
 # it automatically falls back to a thread of 4 per post.

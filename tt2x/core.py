@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import re
 import shutil
 import time
 from datetime import datetime, timezone
@@ -12,7 +15,8 @@ from . import tiktok, video
 from .config import Config
 from .db import DB
 from .dedupe import content_hash, find_similar, fingerprint
-from .x_poster import PartialThreadError
+from .mentions import suggest_handles
+from .x_poster import MAX_TEXT, PartialThreadError
 
 log = logging.getLogger(__name__)
 
@@ -22,10 +26,39 @@ class _Blank(dict):
         return ""
 
 
-def render_caption(cfg: Config, row) -> str:
-    return cfg.caption_template.format_map(
-        _Blank(caption=(row["caption"] or "").strip(), author=row["author"] or "", url=row["url"] or "")
-    ).strip()
+def render_caption(cfg: Config, row, handles: list[str] | tuple = ()) -> str:
+    """Fill the template. When the post must fit 280 characters, only the caption is shortened:
+    mentions and the credit line always stay."""
+    values = dict(author=row["author"] or "", url=row["url"] or "",
+                  mentions=" ".join("@" + h for h in handles))
+
+    def fill(caption: str) -> str:
+        text = cfg.caption_template.format_map(_Blank(caption=caption, **values))
+        return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+    caption = (row["caption"] or "").strip()
+    text = fill(caption)
+    if cfg.long_text or len(text) <= MAX_TEXT:
+        return text
+    room = MAX_TEXT - len(fill("")) - 3  # small margin: X counts emoji as 2
+    if room <= 0:
+        return fill("")
+    short = caption[: room - 1].rstrip()
+    if " " in short[room // 2:]:
+        short = short[: short.rfind(" ")]  # don't cut a word in half
+    return fill(short + "…")
+
+
+def ensure_mentions(cfg: Config, db: DB, row, files: list[Path]) -> list[str]:
+    """Suggested handles for a post (asks Gemini once, then remembers the answer)."""
+    if not cfg.mentions:
+        return []
+    if row["mentions"] is not None:
+        return json.loads(row["mentions"])
+    handles = suggest_handles(row["caption"] or "", files, limit=cfg.max_mentions, model=cfg.gemini_model)
+    if handles or os.environ.get("GEMINI_API_KEY"):
+        db.set_mentions(row["id"], handles)  # don't store "nothing" when there was no key to ask with
+    return handles
 
 
 def ingest(cfg: Config, db: DB, car: tiktok.Carousel) -> str:
@@ -114,11 +147,16 @@ def post_next(cfg: Config, db: DB, poster, *, dry_run: bool = False, post_id: in
     if missing or not files:
         db.mark_failed(row["id"], f"missing image files: {missing or 'none'}")
         return f"#{row['id']} failed: image files missing"
-    text = render_caption(cfg, row)
+    suggested = ensure_mentions(cfg, db, row, files)
 
     if dry_run:
+        text = render_caption(cfg, row, suggested[: cfg.max_mentions])
         return (f"[dry run] would post #{row['id']} (@{row['author']} {row['tiktok_id']}) with "
-                f"{len(files)} images in this order: {', '.join(f.name for f in files)}\n---\n{text}")
+                f"{len(files)} images in this order: {', '.join(f.name for f in files)}\n"
+                f"mentions suggested (checked on X before a real post): {suggested or 'none'}\n---\n{text}")
+
+    handles = poster.verify_handles(suggested, cfg.mention_min_followers)[: cfg.max_mentions] if suggested else []
+    text = render_caption(cfg, row, handles)
 
     if not db.claim_for_posting(row["id"]):
         return f"#{row['id']} is no longer queued; not posting"

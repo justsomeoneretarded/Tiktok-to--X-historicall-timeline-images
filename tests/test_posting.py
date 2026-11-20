@@ -48,7 +48,7 @@ def test_all_slides_in_one_post_in_order(cfg, db, fake_download, monkeypatch):
     assert client.uploads == [f"{i:02d}.jpg" for i in range(1, 8)]
     assert len(client.tweets) == 1
     assert client.tweets[0]["media_ids"] == [f"m-{i:02d}" for i in range(1, 8)]
-    assert "@acct" in client.tweets[0]["text"]
+    assert "via acct on TikTok" in client.tweets[0]["text"]
 
 
 def test_never_posts_same_item_twice(cfg, db, fake_download, monkeypatch):
