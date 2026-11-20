@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS images (
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
-ACTIVE = ("queued", "posting", "posted", "failed")  # statuses that count for duplicate checks
+ACTIVE = ("queued", "held", "posting", "posted", "failed")  # statuses that count for duplicate checks
 
 
 class DB:

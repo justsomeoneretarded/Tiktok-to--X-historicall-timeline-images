@@ -128,6 +128,11 @@ def cmd_queue(args, cfg, db):
     for row, when in zip(queued, slots):
         print(f"  #{row['id']:<4} {when:%a %d %b %H:%M}  @{row['author']:<20} "
               f"{row['image_count']:>2} slides  {(row['caption'] or '')[:50]!r}")
+    held = [r for r in db.all(500) if r["status"] == "held"]
+    if held:
+        print(f"\nON HOLD ({len(held)})  - `tt2x release <id>` to queue again")
+        for row in held:
+            print(f"  #{row['id']:<4} @{row['author']:<20} {row['image_count']:>2} slides  {(row['caption'] or '')[:50]!r}")
     if args.all:
         print("\nHISTORY")
         for row in db.all(args.limit):
@@ -160,6 +165,26 @@ def cmd_retry(args, cfg, db):
 def cmd_skip(args, cfg, db):
     db.set_status(args.id, "skipped_manual")
     print(f"#{args.id} will not be posted")
+
+
+def cmd_hold(args, cfg, db):
+    for pid in args.ids:
+        row = db.get(pid)
+        if not row or row["status"] != "queued":
+            print(f"#{pid}: not queued ({row['status'] if row else 'no such item'}); unchanged")
+            continue
+        db.set_status(pid, "held")
+        print(f"#{pid} on hold (won't be posted until `tt2x release {pid}`)")
+
+
+def cmd_release(args, cfg, db):
+    for pid in args.ids:
+        row = db.get(pid)
+        if not row or row["status"] != "held":
+            print(f"#{pid}: not on hold ({row['status'] if row else 'no such item'}); unchanged")
+            continue
+        db.set_status(pid, "queued")
+        print(f"#{pid} back in the queue")
 
 
 def cmd_run(args, cfg, db):
@@ -224,6 +249,8 @@ def main(argv=None):
     s.set_defaults(fn=cmd_post_next)
     s = sub.add_parser("retry"); s.add_argument("id", type=int); s.set_defaults(fn=cmd_retry)
     s = sub.add_parser("skip"); s.add_argument("id", type=int); s.set_defaults(fn=cmd_skip)
+    s = sub.add_parser("hold"); s.add_argument("ids", type=int, nargs="+"); s.set_defaults(fn=cmd_hold)
+    s = sub.add_parser("release"); s.add_argument("ids", type=int, nargs="+"); s.set_defaults(fn=cmd_release)
     sub.add_parser("prune").set_defaults(fn=cmd_prune)
     s = sub.add_parser("run"); s.add_argument("--once", action="store_true"); s.set_defaults(fn=cmd_run)
 

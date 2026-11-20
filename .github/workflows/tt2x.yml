@@ -13,6 +13,10 @@ on:
         description: "Optional TikTok links to queue (photo or slideshow-video posts), separated by spaces or commas"
         type: string
         default: ""
+      manage:
+        description: "Optional queue changes, e.g. 'hold 1, release 3, skip 4, retry 5' (ids from the queue list)"
+        type: string
+        default: ""
 
 # Never two runs at once: this is what prevents two runs posting the same carousel.
 concurrency:
@@ -51,6 +55,18 @@ jobs:
         run: |
           pip install -e '.[browser]'
           python -m playwright install --with-deps chromium
+
+      - name: Apply queue changes (hold / release / skip / retry)
+        if: github.event_name == 'workflow_dispatch' && inputs.manage != ''
+        env:
+          MANAGE: ${{ inputs.manage }}
+        run: |
+          echo "$MANAGE" | tr ',;' '\n\n' | while read -r verb id rest; do
+            [ -z "$verb" ] && continue
+            case "$verb" in hold|release|skip|retry) ;; *) echo "::error::unknown action '$verb'"; exit 1;; esac
+            case "$id" in ''|*[!0-9]*) echo "::error::'$verb' needs an item number"; exit 1;; esac
+            tt2x "$verb" "$id"
+          done
 
       - name: Queue pasted links
         if: github.event_name == 'workflow_dispatch' && inputs.links != ''

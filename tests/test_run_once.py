@@ -80,3 +80,17 @@ def test_all_accounts_blocked_fails_the_run(tmp_path, monkeypatch, fake_download
         cli.main(["-c", cfgp, "check"])
     with pytest.raises(SystemExit):
         cli.main(["-c", cfgp, "run", "--once"])
+
+
+def test_held_item_is_not_posted_until_released(tmp_path, monkeypatch, fake_download):
+    cfgp, sent = setup(tmp_path, monkeypatch, fake_download, [car("1", [10, 11, 12]), car("2", [20, 21, 22])])
+    at(monkeypatch, 8, 0)
+    cli.main(["-c", cfgp, "run", "--once"])  # queue both
+    cli.main(["-c", cfgp, "hold", "1"])
+    at(monkeypatch, 9, 5)
+    cli.main(["-c", cfgp, "run", "--once"])
+    assert [s[0].split("/")[0] for s in sent] == ["2"]  # #1 skipped while held
+    cli.main(["-c", cfgp, "release", "1"])
+    at(monkeypatch, 14, 5)
+    cli.main(["-c", cfgp, "run", "--once"])
+    assert [s[0].split("/")[0] for s in sent] == ["2", "1"]
