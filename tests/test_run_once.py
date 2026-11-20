@@ -94,3 +94,33 @@ def test_held_item_is_not_posted_until_released(tmp_path, monkeypatch, fake_down
     at(monkeypatch, 14, 5)
     cli.main(["-c", cfgp, "run", "--once"])
     assert [s[0].split("/")[0] for s in sent] == ["2", "1"]
+
+
+def test_prune_keeps_held_and_missing_images_are_refetched(tmp_path, monkeypatch, fake_download):
+    cfgp, sent = setup(tmp_path, monkeypatch, fake_download, [car("1", [10, 11, 12])])
+    at(monkeypatch, 8, 0)
+    cli.main(["-c", cfgp, "run", "--once"])
+    cli.main(["-c", cfgp, "hold", "1"])
+    cli.main(["-c", cfgp, "prune"])
+    folder = tmp_path / "state" / "downloads" / "1"
+    assert folder.exists()  # held items keep their slides
+
+    import shutil
+    shutil.rmtree(folder)  # simulate lost files
+    monkeypatch.setattr(tiktok, "get_post", lambda url: car("1", [10, 11, 12]))
+    cli.main(["-c", cfgp, "release", "1"])
+    cli.main(["-c", cfgp, "post-next"])
+    assert sent == [["1/01.jpg", "1/02.jpg", "1/03.jpg"]]
+
+
+def test_refetch_with_different_slides_is_refused(tmp_path, monkeypatch, fake_download):
+    import pytest
+    cfgp, sent = setup(tmp_path, monkeypatch, fake_download, [car("1", [10, 11, 12])])
+    at(monkeypatch, 8, 0)
+    cli.main(["-c", cfgp, "run", "--once"])
+    import shutil
+    shutil.rmtree(tmp_path / "state" / "downloads" / "1")
+    monkeypatch.setattr(tiktok, "get_post", lambda url: car("1", [12, 11, 10]))  # order changed
+    with pytest.raises(SystemExit):
+        cli.main(["-c", cfgp, "post-next"])
+    assert sent == []

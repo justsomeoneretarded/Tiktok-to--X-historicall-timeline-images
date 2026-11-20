@@ -11,6 +11,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import imagehash
+
 from . import tiktok, video
 from .config import Config
 from .db import DB
@@ -100,6 +102,28 @@ def ingest(cfg: Config, db: DB, car: tiktok.Carousel) -> str:
     return status
 
 
+def refetch(cfg: Config, db: DB, row) -> list[Path]:
+    """Download a queued item's slides again (e.g. after they were cleaned up) and make sure
+    they are the same pictures in the same order as when it was queued."""
+    dest = cfg.downloads_path / row["tiktok_id"]
+    shutil.rmtree(dest, ignore_errors=True)
+    car = tiktok.get_post(row["url"])
+    if car.is_photo:
+        files = tiktok.download_images(car, dest)
+    elif car.video_url:
+        files = video_to_slides(cfg, car, dest)
+    else:
+        raise RuntimeError("post has no images or video any more")
+    stored = [i["phash"] for i in db.images(row["id"])]
+    got = [fingerprint(f)[1] for f in files]
+    if len(got) != len(stored) or any(
+        imagehash.hex_to_hash(a) - imagehash.hex_to_hash(b) > cfg.dedupe_max_distance for a, b in zip(got, stored)
+    ):
+        raise RuntimeError(f"re-downloaded slides differ from the queued ones ({len(got)} vs {len(stored)})")
+    log.info("re-downloaded %d slides for #%s", len(files), row["id"])
+    return files
+
+
 def video_to_slides(cfg: Config, car: tiktok.Carousel, dest: Path) -> list[Path]:
     clip = tiktok.download_video(car, dest)
     try:
@@ -144,6 +168,13 @@ def post_next(cfg: Config, db: DB, poster, *, dry_run: bool = False, post_id: in
             f = cfg.downloads_path / row["tiktok_id"] / f.name
         files.append(f)
     missing = [f for f in files if not f.exists()]
+    if missing and files:
+        try:
+            files = refetch(cfg, db, row)
+            missing = []
+        except Exception as e:  # noqa: BLE001
+            db.mark_failed(row["id"], f"image files missing and re-download failed: {e}")
+            return f"#{row['id']} failed: image files missing, re-download failed: {e}"
     if missing or not files:
         db.mark_failed(row["id"], f"missing image files: {missing or 'none'}")
         return f"#{row['id']} failed: image files missing"

@@ -223,7 +223,10 @@ def cmd_run(args, cfg, db):
 
 def cmd_prune(args, cfg, db):
     removed = 0
-    for row in db.conn.execute("SELECT id, tiktok_id FROM posts WHERE status NOT IN ('queued','posting','failed')"):
+    # Only items that will never be posted again. Anything queued, held, posting or failed keeps its images.
+    done = ("posted", "skipped_duplicate", "skipped_video", "skipped_manual")
+    q = f"SELECT id, tiktok_id FROM posts WHERE status IN ({','.join('?' * len(done))})"
+    for row in db.conn.execute(q, done):
         folder = cfg.downloads_path / row["tiktok_id"]
         if folder.is_dir():
             shutil.rmtree(folder)
