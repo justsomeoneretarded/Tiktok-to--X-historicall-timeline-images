@@ -1,10 +1,11 @@
-"""Posting to X with the user's browser cookies (twikit)."""
+"""Posting to X with the user's browser session cookie, via TweetKit-X
+(the same library the X-soccer-news repo uses with the same TWEETKIT_COOKIE secret)."""
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
+import time
 import os
 import re
 from pathlib import Path
@@ -86,56 +87,38 @@ def chunk(items: list, size: int) -> list[list]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
-_OLD_ONDEMAND = re.compile(r"""['"]ondemand\.s['"]:\s*['"](\w+)['"]""")
-_NEW_ONDEMAND_ID = re.compile(r"""[{,](\d+):\s*['"]ondemand\.s['"]""")
-_INDICES = re.compile(r"""(\(\w\[(\d{1,2})\],\s*16\))+""")
+
+class PostedButUnconfirmed(RuntimeError):
+    """X answered without an error but also without a post id: the post may exist. Never retry automatically."""
 
 
-def find_ondemand_hash(html: str) -> str | None:
-    """Locate the ondemand.s script hash in x.com's homepage.
-
-    Older pages had `"ondemand.s":"<hash>"`. Newer ones map chunk ids to names and hashes
-    in separate tables: `123:"ondemand.s"` ... `123:"<hash>"`.
-    """
-    m = _OLD_ONDEMAND.search(html)
-    if m:
-        return m.group(1)
-    m = _NEW_ONDEMAND_ID.search(html)
-    if m:
-        h = re.search(r"""[{,]%s:\s*['"]([0-9a-f]{4,})['"]""" % re.escape(m.group(1)), html)
-        if h:
-            return h.group(1)
-    return None
+class PartialThreadError(RuntimeError):
+    def __init__(self, tweet_ids: list[str], cause: Exception):
+        super().__init__(f"thread stopped after {len(tweet_ids)} posts ({tweet_ids}): {cause}")
+        self.tweet_ids = tweet_ids
 
 
-def patch_twikit() -> None:
-    """twikit 2.3.x fails with "Couldn't get KEY_BYTE indices" since X changed its homepage.
-    Replace its lookup with one that understands both layouts."""
-    try:
-        from twikit.x_client_transaction.transaction import ClientTransaction
-    except ImportError:
-        return
-    if getattr(ClientTransaction, "_tt2x_patched", False):
-        return
+def cookie_header(cookies: dict[str, str]) -> str:
+    """`auth_token=...; ct0=...; ...` as TweetKit-X expects."""
+    keep = {k: v for k, v in cookies.items() if re.fullmatch(r"[A-Za-z0-9_\-]+", k) and v}
+    first = [k for k in ("auth_token", "ct0") if k in keep]
+    return "; ".join(f"{k}={keep[k]}" for k in first + [k for k in keep if k not in first])
 
-    async def get_indices(self, home_page_response, session, headers):
-        response = self.validate_response(home_page_response) or self.home_page_response
-        file_hash = find_ondemand_hash(str(response))
-        if not file_hash:
-            raise Exception("Couldn't find X's ondemand.s script (X changed its site again)")
-        url = f"https://abs.twimg.com/responsive-web/client-web/ondemand.s.{file_hash}a.js"
-        js = await session.request(method="GET", url=url, headers=headers)
-        indices = [int(m.group(2)) for m in _INDICES.finditer(str(js.text))]
-        if not indices:
-            raise Exception("Couldn't get KEY_BYTE indices")
-        return indices[0], indices[1:]
 
-    ClientTransaction.get_indices = get_indices
-    ClientTransaction._tt2x_patched = True
+def _check(result: dict, what: str) -> str:
+    """Return the new post id, or raise. TweetKit-X returns {ok, id} / {ok: False, status, error}."""
+    if result.get("ok") and str(result.get("id", "")).isdigit():
+        return str(result["id"])
+    error = str(result.get("error", ""))[:300]
+    status = result.get("status")
+    if status == 200 and error.lstrip().startswith("{"):
+        # HTTP 200 with a body we couldn't read an id from: X may have created the post.
+        raise PostedButUnconfirmed(f"{what}: X answered 200 without a post id; check X before retrying")
+    raise RuntimeError(f"{what} refused by X (HTTP {status}): {error}")
 
 
 class XPoster:
-    def __init__(self, cookies_path: Path, *, max_images_per_post: int = 0, long_text: bool = False,
+    def __init__(self, cookies_path: Path | None, *, max_images_per_post: int = 0, long_text: bool = False,
                  client=None):
         self.cookies_path = cookies_path
         self.max_images = max_images_per_post
@@ -144,87 +127,91 @@ class XPoster:
 
     def _get_client(self):
         if self._client is None:
-            from twikit import Client
+            from tweetkit_x import TweetKit
 
-            patch_twikit()
-            c = Client("en-US")
-            c.set_cookies(load_cookie_dict(self.cookies_path))
-            self._client = c
+            cookies = load_cookie_dict(self.cookies_path or Path("cookies.json"))
+            try:
+                self._client = TweetKit(cookie=cookie_header(cookies), timeout=60)
+            except Exception as e:  # noqa: BLE001  (never echo cookie values)
+                raise ValueError(f"X session cookie not accepted ({type(e).__name__}); "
+                                 "update the TWEETKIT_COOKIE secret") from None
         return self._client
 
-    async def _post(self, text: str, files: list[Path]) -> list[str]:
+    def _create(self, text: str, media_ids: list[str], reply_to: str | None = None) -> str:
+        return _check(self._get_client().create_tweet(text, media_ids=media_ids, reply_to=reply_to), "post")
+
+    def post(self, text: str, files: list[Path]) -> list[str]:
         client = self._get_client()
         media_ids: list[str] = []
         for f in files:  # one at a time, so media_ids follow slide order
-            media_ids.append(await client.upload_media(str(f), wait_for_completion=True))
-            log.info("uploaded %s", f.name)
+            media_ids.append(str(client.upload_media(str(f))))
+            log.info("uploaded %s (%d/%d)", f.name, len(media_ids), len(files))
 
         text = fit_text(text, self.long_text)
         groups = chunk(media_ids, self.max_images)
         if len(groups) == 1:
             try:
-                tweet = await client.create_tweet(text=text, media_ids=groups[0],
-                                                  is_note_tweet=self.long_text and len(text) > MAX_TEXT)
-                return [str(tweet.id)]
+                return [self._create(text, groups[0])]
+            except PostedButUnconfirmed:
+                raise
             except Exception as e:  # noqa: BLE001
                 if len(media_ids) <= FALLBACK_CHUNK:
                     raise
-                # Nothing was posted yet, so splitting into a thread is safe.
-                log.warning("X refused %d images in one post (%s); posting as a thread of %d",
+                # Nothing was posted, so splitting into an ordered thread is safe.
+                log.warning("X refused %d images in one post (%s); posting a thread of %d per post",
                             len(media_ids), e, FALLBACK_CHUNK)
                 groups = chunk(media_ids, FALLBACK_CHUNK)
-        return await self._thread(client, text, groups)
+        return self._thread(text, groups)
 
-    async def _thread(self, client, text: str, groups: list[list[str]]) -> list[str]:
+    def _thread(self, text: str, groups: list[list[str]]) -> list[str]:
         ids: list[str] = []
-        reply_to = None
         total = len(groups)
         for n, group in enumerate(groups, start=1):
             body = text if n == 1 else f"({n}/{total})"
             try:
-                tweet = await client.create_tweet(text=body, media_ids=group, reply_to=reply_to)
+                ids.append(self._create(body, group, reply_to=ids[-1] if ids else None))
             except Exception as e:
                 if ids:  # part of the thread is live: report exactly what exists
                     raise PartialThreadError(ids, e) from e
                 raise
-            ids.append(str(tweet.id))
-            reply_to = tweet.id
-            await asyncio.sleep(3)
+            time.sleep(3)
         return ids
 
-    def post(self, text: str, files: list[Path]) -> list[str]:
-        return asyncio.run(self._post(text, files))
+    def whoami(self) -> str:
+        """Login check (read-only): which account the cookie belongs to."""
+        client = self._get_client()
+        info = client.whoami()
+        if not info.get("ready"):
+            raise ValueError("cookie lacks auth_token/ct0")
+        uid = info.get("user_id")
+        name = None
+        if uid and hasattr(client, "user_by_id"):
+            try:
+                name = (client.user_by_id(uid) or {}).get("username")
+            except Exception:  # noqa: BLE001
+                name = None
+        # A real authenticated call proves the session works (not just that the cookie looks complete).
+        probe = client.user_profile("X")
+        if not probe.get("ok"):
+            raise RuntimeError(f"X rejected the session: {str(probe.get('error'))[:200]}")
+        return f"@{name}" if name else f"user id {uid}"
 
-    async def _verify(self, handles: list[str], min_followers: int) -> list[str]:
+    def verify_handles(self, handles: list[str], min_followers: int = 10000) -> list[str]:
+        """Keep only handles that exist on X and look official (verified, or many followers)."""
         client = self._get_client()
         ok = []
         for h in handles:
             try:
-                user = await client.get_user_by_screen_name(h)
-            except Exception as e:  # noqa: BLE001  (missing/suspended account)
+                prof = client.user_profile(h)
+            except Exception as e:  # noqa: BLE001
                 log.info("not mentioning @%s: %s", h, str(e)[:100])
                 continue
-            verified = bool(getattr(user, "is_blue_verified", False) or getattr(user, "verified", False))
-            followers = int(getattr(user, "followers_count", 0) or 0)
-            if verified or followers >= min_followers:
-                ok.append(getattr(user, "screen_name", None) or h)
+            if not prof.get("ok") or not prof.get("username"):
+                log.info("not mentioning @%s: account not found", h)
+                continue
+            followers = int(prof.get("followers") or 0)
+            if prof.get("verified") or followers >= min_followers:
+                ok.append(prof["username"])
             else:
                 log.info("not mentioning @%s: unverified with %d followers", h, followers)
         return ok
-
-    def whoami(self) -> str:
-        """Read-only login check: the screen name the cookies belong to."""
-        async def run():
-            user = await self._get_client().user()
-            return f"@{user.screen_name} ({user.name})"
-        return asyncio.run(run())
-
-    def verify_handles(self, handles: list[str], min_followers: int = 10000) -> list[str]:
-        """Keep only handles that exist on X and look official (verified, or many followers)."""
-        return asyncio.run(self._verify(handles, min_followers))
-
-
-class PartialThreadError(RuntimeError):
-    def __init__(self, tweet_ids: list[str], cause: Exception):
-        super().__init__(f"thread stopped after {len(tweet_ids)} posts ({tweet_ids}): {cause}")
-        self.tweet_ids = tweet_ids

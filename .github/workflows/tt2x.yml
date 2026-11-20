@@ -67,7 +67,7 @@ jobs:
         run: |
           echo "$MANAGE" | tr ',;' '\n\n' | while read -r verb id rest; do
             [ -z "$verb" ] && continue
-            case "$verb" in hold|release|skip|retry) ;; *) echo "::error::unknown action '$verb'"; exit 1;; esac
+            case "$verb" in hold|release|skip|retry|remention) ;; *) echo "::error::unknown action '$verb'"; exit 1;; esac
             case "$id" in ''|*[!0-9]*) echo "::error::'$verb' needs an item number"; exit 1;; esac
             tt2x "$verb" "$id"
           done

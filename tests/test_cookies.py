@@ -48,18 +48,33 @@ def test_nothing_configured(monkeypatch, tmp_path):
         load_cookie_dict(tmp_path / "none.json")
 
 
-def test_ondemand_hash_old_and_new_layouts():
-    from tt2x.x_poster import find_ondemand_hash
-    old = '<script>window.__SCRIPTS__={"ondemand.s":"a1b2c3d4e5","other":"zz"}</script>'
-    new = ('<script>e.u=e=>e+"."+{12:"vendor",20113:"ondemand.s",40:"main"}[e]+"."+'
-           '{12:"aaaa1111",20113:"9f8e7d6c5b4a",40:"bbbb2222"}[e]+"a.js"</script>')
-    assert find_ondemand_hash(old) == "a1b2c3d4e5"
-    assert find_ondemand_hash(new) == "9f8e7d6c5b4a"
-    assert find_ondemand_hash("<html>nothing</html>") is None
+def test_cookie_header_for_tweetkit():
+    from tt2x.x_poster import cookie_header
+    c = parse_cookie_string("X_AUTH_TOKEN = abc , X_CT0 = def")
+    assert cookie_header(c) == "auth_token=abc; ct0=def"
+    c = parse_cookie_string("guest_id=v1; ct0=def; twid=u%3D42; auth_token=abc")
+    assert cookie_header(c).startswith("auth_token=abc; ct0=def") and "twid=u%3D42" in cookie_header(c)
 
 
-def test_patch_installs():
-    from twikit.x_client_transaction.transaction import ClientTransaction
-    from tt2x.x_poster import patch_twikit
-    patch_twikit()
-    assert ClientTransaction._tt2x_patched
+def test_tweetkit_accepts_our_cookie_and_reads_it_back():
+    from tweetkit_x import TweetKit
+    from tt2x.x_poster import cookie_header
+    tk = TweetKit(cookie=cookie_header(parse_cookie_string("X_AUTH_TOKEN = abc, X_CT0 = def")))
+    info = tk.whoami()  # local check, no network
+    assert info["ready"] and info["ct0_len"] == 3
+
+
+def test_poster_builds_client_from_secret(monkeypatch):
+    from tt2x.x_poster import XPoster
+    monkeypatch.setenv("TWEETKIT_COOKIE", "X_AUTH_TOKEN = abc, X_CT0 = def")
+    client = XPoster(None)._get_client()
+    assert client.whoami()["ready"]
+
+
+def test_bad_secret_error_hides_values(monkeypatch):
+    from tt2x.x_poster import XPoster
+    monkeypatch.setenv("TWEETKIT_COOKIE", "X_AUTH_TOKEN = secretvalue")
+    with pytest.raises(ValueError) as e:
+        XPoster(None)._get_client()
+    assert "secretvalue" not in str(e.value)
+

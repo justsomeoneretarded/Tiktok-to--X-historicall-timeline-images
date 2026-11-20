@@ -8,7 +8,8 @@ version = "0.1.0"
 description = "Watch TikTok photo carousels and repost them to X, in slide order, on a schedule, never twice."
 requires-python = ">=3.10"
 dependencies = [
-    "twikit>=2.3",
+    "tweetkit-x @ git+https://github.com/nsozturk/tweetkit-x.git@d42503a936f80eb0af2e9856a0fbd392cc4a750c",
+    "requests",
     "httpx",
     "Pillow",
     "imagehash",

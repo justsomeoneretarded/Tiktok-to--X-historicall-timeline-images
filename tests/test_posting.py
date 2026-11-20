@@ -5,33 +5,32 @@ from tt2x.tiktok import Carousel
 from tt2x.x_poster import XPoster, chunk, fit_text
 
 
-class FakeTweet:
-    def __init__(self, i):
-        self.id = i
-
-
 class FakeClient:
-    """Records what would be sent to X."""
+    """Behaves like TweetKit-X: upload_media -> id, create_tweet -> {ok, id} / {ok: False, status, error}."""
 
-    def __init__(self, max_images=None, fail=False):
+    def __init__(self, max_images=None, fail=False, ambiguous=False):
         self.uploads: list[str] = []
         self.folders: list[str] = []
         self.tweets: list[dict] = []
         self.max_images = max_images
         self.fail = fail
+        self.ambiguous = ambiguous
 
-    async def upload_media(self, source, wait_for_completion=False):
-        self.uploads.append(Path(source).name)
-        self.folders.append(Path(source).parent.name)
-        return f"m-{Path(source).stem}"
+    def upload_media(self, path, media_type=None, alt_text=None):
+        self.uploads.append(Path(path).name)
+        self.folders.append(Path(path).parent.name)
+        return f"m-{Path(path).stem}"
 
-    async def create_tweet(self, text="", media_ids=None, reply_to=None, is_note_tweet=False):
+    def create_tweet(self, text, media_ids=None, reply_to=None, quote_tweet_id=None):
         if self.fail:
-            raise RuntimeError("network down")
+            return {"ok": False, "status": 403, "error": "Authorization: denied"}
+        if self.ambiguous:
+            return {"ok": False, "status": 200, "error": '{"data": {"create_tweet": {}}}'}
         if self.max_images and len(media_ids) > self.max_images:
-            raise RuntimeError("too many media")
+            return {"ok": False, "status": 200, "error": "Your media IDs are invalid."}
         self.tweets.append({"text": text, "media_ids": list(media_ids), "reply_to": reply_to})
-        return FakeTweet(str(1000 + len(self.tweets)))
+        rid = str(1000 + len(self.tweets))
+        return {"ok": True, "id": rid, "url": f"https://x.com/i/status/{rid}"}
 
 
 def queue_one(cfg, db, n=7, pid="1"):
@@ -40,7 +39,7 @@ def queue_one(cfg, db, n=7, pid="1"):
 
 
 def test_all_slides_in_one_post_in_order(cfg, db, fake_download, monkeypatch):
-    monkeypatch.setattr("asyncio.sleep", _nosleep)
+    monkeypatch.setattr("tt2x.x_poster.time.sleep", lambda s: None)
     queue_one(cfg, db, 7)
     client = FakeClient()
     out = post_next(cfg, db, XPoster(Path("x"), client=client))
@@ -52,7 +51,7 @@ def test_all_slides_in_one_post_in_order(cfg, db, fake_download, monkeypatch):
 
 
 def test_never_posts_same_item_twice(cfg, db, fake_download, monkeypatch):
-    monkeypatch.setattr("asyncio.sleep", _nosleep)
+    monkeypatch.setattr("tt2x.x_poster.time.sleep", lambda s: None)
     queue_one(cfg, db, 3, pid="1")
     queue_one(cfg, db, 3, pid="2")
     client = FakeClient()
@@ -66,7 +65,7 @@ def test_never_posts_same_item_twice(cfg, db, fake_download, monkeypatch):
 
 
 def test_falls_back_to_ordered_thread(cfg, db, fake_download, monkeypatch):
-    monkeypatch.setattr("asyncio.sleep", _nosleep)
+    monkeypatch.setattr("tt2x.x_poster.time.sleep", lambda s: None)
     queue_one(cfg, db, 10)
     client = FakeClient(max_images=4)
     post_next(cfg, db, XPoster(Path("x"), client=client))
@@ -98,5 +97,10 @@ def test_helpers():
     assert len(fit_text("a" * 400, True)) == 400
 
 
-async def _nosleep(*_a, **_k):
-    return None
+def test_ambiguous_answer_is_never_retried(cfg, db, fake_download):
+    queue_one(cfg, db, 6)  # > 4 images: an ambiguous answer must NOT trigger the thread fallback either
+    client = FakeClient(ambiguous=True)
+    out = post_next(cfg, db, XPoster(Path("x"), client=client))
+    assert "failed" in out and "check X" in out
+    assert db.all()[0]["status"] == "failed"
+    assert client.tweets == [] and len(client.uploads) == 6

@@ -186,6 +186,14 @@ These are other people's images. Keep the `via @{author}` credit in `caption_tem
 get permission from the accounts you repost. Posting through cookies isn't X's official API, so keep
 the posting rate modest.
 
+## How posting works
+
+Posts go through [TweetKit-X](https://github.com/nsozturk/tweetkit-x) with your `TWEETKIT_COOKIE`,
+the same library and secret as the X-soccer-news repo. Every slide is uploaded in order and all of
+them are attached to one post. If X refuses that many images, it posts an ordered thread of 4 per post.
+If X's answer is unclear (the post *might* exist), the item is marked failed and **never retried
+automatically**: check X first, then `retry <id>`.
+
 ## Development
 ```bash
 pip install -e '.[dev]' && pytest

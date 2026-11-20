@@ -46,12 +46,12 @@ def test_gemini_request_and_key_not_leaked(tmp_path):
 
 def test_gemini_failure_never_blocks(tmp_path, caplog):
     client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(500, text="boom k123")))
-    assert suggest_handles("c", [], limit=8, model="m", api_key="k123", client=client) == []
+    assert suggest_handles("c", [], limit=8, model="m", api_key="k123", client=client) is None
     assert "k123" not in caplog.text
 
 
 def test_no_key_means_no_mentions():
-    assert suggest_handles("c", [], limit=8, model="m") == []
+    assert suggest_handles("c", [], limit=8, model="m") is None
 
 
 def row(caption, author="acct"):
@@ -71,32 +71,26 @@ def test_no_mentions_leaves_no_blank_gap(cfg):
     assert text == "Short caption\n\n📷 via acct on TikTok"
 
 
-class FakeUser:
-    def __init__(self, name, verified=False, followers=0):
-        self.screen_name, self.is_blue_verified, self.followers_count = name, verified, followers
-
-
 class Client:
-    users = {"SpaceX": FakeUser("SpaceX", True), "elonmusk": FakeUser("elonmusk", True),
-             "tiny": FakeUser("tiny", False, 12), "NASA": FakeUser("NASA", False, 80_000_000)}
+    """TweetKit-X-like: user_profile -> {ok, username, followers, verified}."""
+    users = {"spacex": ("SpaceX", True, 40_000_000), "elonmusk": ("elonmusk", True, 200_000_000),
+             "tiny": ("tiny", False, 12), "nasa": ("NASA", False, 80_000_000)}
 
     def __init__(self):
         self.tweets = []
 
-    async def get_user_by_screen_name(self, h):
-        if h not in self.users:
-            raise RuntimeError("User not found")
-        return self.users[h]
+    def user_profile(self, username):
+        u = self.users.get(username.lower())
+        if not u:
+            return {"ok": False, "error": "not found"}
+        return {"ok": True, "username": u[0], "verified": u[1], "followers": u[2]}
 
-    async def upload_media(self, source, wait_for_completion=False):
+    def upload_media(self, path, media_type=None, alt_text=None):
         return "m"
 
-    async def create_tweet(self, text="", media_ids=None, reply_to=None, is_note_tweet=False):
+    def create_tweet(self, text, media_ids=None, reply_to=None, quote_tweet_id=None):
         self.tweets.append(text)
-
-        class T:
-            id = "1"
-        return T()
+        return {"ok": True, "id": "1"}
 
 
 def test_post_mentions_only_verified_existing_accounts(cfg, db, fake_download, monkeypatch):

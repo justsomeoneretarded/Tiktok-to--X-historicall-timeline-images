@@ -177,6 +177,13 @@ def cmd_skip(args, cfg, db):
     print(f"#{args.id} will not be posted")
 
 
+def cmd_remention(args, cfg, db):
+    for pid in args.ids:
+        db.conn.execute("UPDATE posts SET mentions=NULL WHERE id=?", (pid,))
+        db.conn.commit()
+        print(f"#{pid}: mentions will be looked up again")
+
+
 def cmd_hold(args, cfg, db):
     for pid in args.ids:
         row = db.get(pid)
@@ -262,6 +269,7 @@ def main(argv=None):
     s.set_defaults(fn=cmd_post_next)
     s = sub.add_parser("retry"); s.add_argument("id", type=int); s.set_defaults(fn=cmd_retry)
     s = sub.add_parser("skip"); s.add_argument("id", type=int); s.set_defaults(fn=cmd_skip)
+    s = sub.add_parser("remention"); s.add_argument("ids", type=int, nargs="+"); s.set_defaults(fn=cmd_remention)
     s = sub.add_parser("hold"); s.add_argument("ids", type=int, nargs="+"); s.set_defaults(fn=cmd_hold)
     s = sub.add_parser("release"); s.add_argument("ids", type=int, nargs="+"); s.set_defaults(fn=cmd_release)
     sub.add_parser("prune").set_defaults(fn=cmd_prune)

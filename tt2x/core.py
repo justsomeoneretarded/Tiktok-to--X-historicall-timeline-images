@@ -58,8 +58,9 @@ def ensure_mentions(cfg: Config, db: DB, row, files: list[Path]) -> list[str]:
     if row["mentions"] is not None:
         return json.loads(row["mentions"])
     handles = suggest_handles(row["caption"] or "", files, limit=cfg.max_mentions, model=cfg.gemini_model)
-    if handles or os.environ.get("GEMINI_API_KEY"):
-        db.set_mentions(row["id"], handles)  # don't store "nothing" when there was no key to ask with
+    if handles is None:  # couldn't ask (no key / error): post without, ask again next time
+        return []
+    db.set_mentions(row["id"], handles)
     return handles
 
 

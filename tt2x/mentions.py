@@ -73,12 +73,13 @@ def _image_part(path: Path) -> dict:
 
 
 def suggest_handles(caption: str, images: list[Path], *, limit: int, model: str,
-                    api_key: str | None = None, client: httpx.Client | None = None) -> list[str]:
-    """Ask Gemini who the post is about. Returns [] when no key is set or anything fails."""
+                    api_key: str | None = None, client: httpx.Client | None = None) -> list[str] | None:
+    """Ask Gemini who the post is about. Returns None when it could not ask (no key, error,
+    timeout), so the caller can try again later instead of remembering "nobody"."""
     api_key = api_key or os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
         log.info("GEMINI_API_KEY not set; no mentions suggested")
-        return []
+        return None
     # Ask for a few extra: some may fail the existence check on X later.
     ask = limit + 2
     body = {
@@ -95,4 +96,4 @@ def suggest_handles(caption: str, images: list[Path], *, limit: int, model: str,
     except Exception as e:  # noqa: BLE001  (never block a post because of mentions)
         msg = str(e).replace(api_key, "***")
         log.warning("Gemini mention lookup failed: %s", msg[:300])
-        return []
+        return None
