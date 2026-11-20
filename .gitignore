@@ -1,0 +1,8 @@
+cookies.json
+config.yaml
+tt2x.db
+downloads/
+__pycache__/
+*.egg-info/
+.venv/
+.pytest_cache/

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tt2x"
+version = "0.1.0"
+description = "Watch TikTok photo carousels and repost them to X, in slide order, on a schedule, never twice."
+requires-python = ">=3.10"
+dependencies = [
+    "twikit>=2.3",
+    "httpx",
+    "Pillow",
+    "imagehash",
+    "PyYAML",
+    "tzdata",
+]
+
+[project.optional-dependencies]
+browser = ["playwright"]
+dev = ["pytest"]
+
+[project.scripts]
+tt2x = "tt2x.cli:main"
+
+[tool.setuptools]
+packages = ["tt2x"]
